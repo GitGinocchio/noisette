@@ -94,14 +94,14 @@ impl eframe::App for Noisette {
             let width = ui.available_width();
             let height = ui.available_height();
 
-            let col_width = (width / 7.0) - 10.0;
+            let col_width = (width / 6.0) - 10.0;
 
             egui::Grid::new("tabella_suoni")
                 .striped(true)
                 .show(ui, |ui| {
                     ui.add_sized([col_width, 20.0], egui::widgets::Label::new("Name"));
                     ui.add_sized([col_width, 20.0], egui::widgets::Label::new("Shortcut"));
-                    ui.add_sized([col_width, 20.0], egui::widgets::Label::new("Path"));
+                    ui.add_sized([col_width, 20.0], egui::widgets::Label::new("File"));
                     ui.add_sized([col_width, 20.0],egui::widgets::Label::new("Select File / Play"));
                     ui.add_sized([col_width, 20.0],egui::widgets::Label::new("Edit / Save"));
                     ui.add_sized([col_width, 20.0],egui::widgets::Label::new("Remove"));
@@ -139,8 +139,48 @@ impl eframe::App for Noisette {
                                 idx,
                             ));
 
-                            let no_path = String::from("No Path");
-                            ui.add_sized([col_width, 20.0], egui::Label::new(sound.path.as_deref().unwrap_or(&no_path)));
+                            match sound.path.as_deref() {
+                                Some(path) => {
+                                    let path = std::path::Path::new(path);
+
+                                    let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                                        Some(file_name) => file_name,
+                                        None => "No file"
+                                    };
+
+                                    if ui.add_sized([col_width, 20.0], egui::Button::new(file_name)).clicked() {
+                                        #[cfg(target_os = "windows")]
+                                        {
+                                            if let Some(path_str) = path.to_str() {
+                                                let _ = std::process::Command::new("explorer")
+                                                    .arg("/select,")
+                                                    .arg(path_str)
+                                                    .spawn();
+                                            }
+                                        }
+
+                                        #[cfg(target_os = "macos")]
+                                        {
+                                            let _ = std::process::Command::new("open")
+                                                .arg("-R")
+                                                .arg(path)
+                                                .spawn();
+                                        }
+
+                                        #[cfg(target_os = "linux")]
+                                        {
+                                            if let Some(parent) = path.parent() {
+                                                let _ = std::process::Command::new("xdg-open")
+                                                    .arg(parent)
+                                                    .spawn();
+                                            }
+                                        } 
+                                    };
+                                },
+                                None => {
+                                    ui.add_sized([col_width, 20.0], egui::Label::new("No File"));
+                                }
+                            };
 
                             if ui.add_sized([col_width, 20.0], egui::Button::new("Select File")).clicked() {
                                 if let Some(path) = rfd::FileDialog::new()
@@ -162,12 +202,8 @@ impl eframe::App for Noisette {
                         else {
                             let sound_name = match sound.name.as_deref() {
                                 Some(string) => {
-                                    if string.chars().count() > 0 {
-                                        string
-                                    }
-                                    else {
-                                        "No Name"
-                                    }
+                                    if string.chars().count() > 0 { string }
+                                    else { "No Name" }
                                 }
                                 None => "No Name"
                             };
@@ -179,7 +215,48 @@ impl eframe::App for Noisette {
                                 |s| shortcut_as_string(&s),
                             )));
 
-                            ui.add_sized([col_width, 20.0], egui::Label::new(sound.path.as_deref().unwrap_or("No Path")));
+                            match sound.path.as_deref() {
+                                Some(path) => {
+                                    let path = std::path::Path::new(path);
+
+                                    let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                                        Some(file_name) => file_name,
+                                        None => "No file"
+                                    };
+
+                                    if ui.add_sized([col_width, 20.0], egui::Button::new(file_name)).clicked() {
+                                        #[cfg(target_os = "windows")]
+                                        {
+                                            if let Some(path_str) = path.to_str() {
+                                                let _ = std::process::Command::new("explorer")
+                                                    .arg("/select,")
+                                                    .arg(path_str)
+                                                    .spawn();
+                                            }
+                                        }
+
+                                        #[cfg(target_os = "macos")]
+                                        {
+                                            let _ = std::process::Command::new("open")
+                                                .arg("-R")
+                                                .arg(path)
+                                                .spawn();
+                                        }
+
+                                        #[cfg(target_os = "linux")]
+                                        {
+                                            if let Some(parent) = path.parent() {
+                                                let _ = std::process::Command::new("xdg-open")
+                                                    .arg(parent)
+                                                    .spawn();
+                                            }
+                                        } 
+                                    };
+                                },
+                                None => {
+                                    ui.add_sized([col_width, 20.0], egui::Label::new("No File"));
+                                }
+                            };
 
                             ui.add_sized([col_width, 20.0], egui::Button::new("Play"));
 

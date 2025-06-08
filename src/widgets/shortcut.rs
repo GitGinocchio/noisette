@@ -21,7 +21,7 @@ impl Widget for ShortcutRecorder<'_> {
         let is_listening = self.listening_shortcut.map_or(false, |active_id| active_id == self.id);
 
         let label = if is_listening {
-            "Premi una combinazione di tasti...".to_string()
+            "Type a Shortcut...".to_string()
         } else if let Some(shortcut) = &self.shortcut {
             let mods = format_modifiers(&shortcut.modifiers);
             if mods.is_empty() {
@@ -30,7 +30,7 @@ impl Widget for ShortcutRecorder<'_> {
                 format!("{}+{:?}", mods, shortcut.logical_key)
             }
         } else {
-            "Nessuna scorciatoia".to_string()
+            "No Shortcut".to_string()
         };
 
         let response = ui.button(label);
