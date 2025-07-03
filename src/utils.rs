@@ -15,3 +15,13 @@ pub fn shortcut_as_string(sc: &egui::KeyboardShortcut) -> String {
     parts.push(&key_string);
     parts.join("+")
 }
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+// Qui dici a Rust: "questa funzione JS esiste e voglio poterla usare"
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    pub fn trigger_file_picker(row : usize);
+}

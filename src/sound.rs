@@ -8,7 +8,8 @@ pub struct Sound {
     pub name: Option<String>,
     pub path: Option<String>,
     pub shortcut: Option<KeyboardShortcut>,
-    pub editing: bool
+    pub editing: bool,
+    pub data: Option<Vec<u8>>,
 }
 
 impl Default for Sound {
@@ -17,7 +18,8 @@ impl Default for Sound {
             name: None,
             path: None,
             shortcut: None,
-            editing: true
+            editing: true,
+            data: None
         }
     }
 }

@@ -7,7 +7,7 @@
 
 <head>
     <!-- change this to your project name -->
-    <title>eframe template</title>
+    <title>Noisette</title>
 
     <!-- config for our rust wasm binary. go to https://trunkrs.dev/assets/#rust for more customization -->
     <link data-trunk rel="rust" data-wasm-opt="2" />
@@ -16,6 +16,37 @@
 
     <link data-trunk rel="icon" href="assets/favicon.ico">
 
+    <script type="module">
+        import init, * as wasm from './noisette.js';
+
+        // Definisce la funzione globale che Rust può chiamare
+        window.trigger_file_picker = (row) => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = ".mp3, .wav";
+
+            input.onchange = async () => {
+                console.log("ciao");
+                const file = input.files?.[0];
+                if (!file) {
+                    input.hidden = true;
+                    return 
+                };
+
+                console.log(file);
+
+                const arrayBuffer = await file.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+
+                // Passa nome e contenuto a Rust
+                console.log("handling file");
+                wasm.handle_file(row, file.name, uint8Array);
+            };
+
+            input.click();
+        };
+
+    </script>
 
     <link data-trunk rel="copy-file" href="assets/sw.js"/>
     <link data-trunk rel="copy-file" href="assets/manifest.json"/>
@@ -23,7 +54,6 @@
     <link data-trunk rel="copy-file" href="assets/icon-256.png" data-target-path="assets"/>
     <link data-trunk rel="copy-file" href="assets/icon_ios_touch_192.png" data-target-path="assets"/>
     <link data-trunk rel="copy-file" href="assets/maskable_icon_x512.png" data-target-path="assets"/>
-
 
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="assets/icon_ios_touch_192.png">

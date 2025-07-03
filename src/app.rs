@@ -1,5 +1,18 @@
-use egui::{KeyboardShortcut, Pos2};
-use rfd::FileDialog;
+//use egui::{KeyboardShortcut, Pos2};
+
+//#[cfg(not(target_arch = "wasm32"))]
+//use rfd::FileDialog;
+
+#[cfg(target_arch = "wasm32")]
+use {
+    std::cell::RefCell,
+    wasm_bindgen::prelude::*,
+    wasm_bindgen::JsCast,
+    web_sys::{Blob, Url, BlobPropertyBag},
+    js_sys::Uint8Array,
+};
+
+
 
 use crate::widgets::shortcut::ShortcutRecorder;
 use crate::sound::Sound;
@@ -48,6 +61,20 @@ impl Noisette {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    pub static LAST_SOUND: RefCell<Option<(usize, String, Uint8Array)>> = RefCell::new(None);
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn handle_file(row : usize, name: String, data: Uint8Array) {
+    println!("{row}");
+    LAST_SOUND.with(|slot| {
+        *slot.borrow_mut() = Some((row, name, data));
+    });
+}
+
 impl eframe::App for Noisette {
     /// Called by the frame work to save state before shutdown.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -59,6 +86,23 @@ impl eframe::App for Noisette {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Put your widgets into a `SidePanel`, `TopBottomPanel`, `CentralPanel`, `Window` or `Area`.
         // For inspiration and more examples, go to https://emilk.github.io/egui
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            LAST_SOUND.with(|slot| {
+                if let Some((row, name, data)) = slot.borrow_mut().take() {
+                    if let Some(sound) = self.sounds.get_mut(row) {
+                        let sound: &mut Sound = sound;
+                        sound.path = Some(name);
+                        sound.data = Some(data.to_vec());
+                    } else {
+                        // Index non valido (es. fuori range)
+                        eprintln!("Errore: index {} fuori dai limiti di sounds (len = {})", row, self.sounds.len());
+                    }
+                }
+            });
+        }
+
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             // The top panel is often a good place for a menu bar:
@@ -92,7 +136,7 @@ impl eframe::App for Noisette {
         egui::CentralPanel::default().show(ctx, |ui| {
             // The central panel the region left after adding TopPanel's and SidePanel's
             let width = ui.available_width();
-            let height = ui.available_height();
+            //let height = ui.available_height();
 
             let col_width = (width / 6.0) - 10.0;
 
@@ -115,10 +159,10 @@ impl eframe::App for Noisette {
                     for idx in 0..self.sounds.len() {
                         let sound = &mut self.sounds[idx];
 
-                        let drag_id = egui::Id::new(format!("drag_sound_{}", idx));
-                        let is_dragging = ctx.is_being_dragged(drag_id);
+                        //let drag_id = egui::Id::new(format!("drag_sound_{}", idx));
+                        //let is_dragging = ctx.is_being_dragged(drag_id);
 
-                        let row_start = ui.cursor().min;
+                        //let row_start = ui.cursor().min;
 
                         if sound.editing {
                             if sound.name.is_none() {
@@ -147,7 +191,7 @@ impl eframe::App for Noisette {
                                         Some(file_name) => file_name,
                                         None => "No file"
                                     };
-
+                                    
                                     if ui.add_sized([col_width, 20.0], egui::Button::new(file_name)).clicked() {
                                         #[cfg(target_os = "windows")]
                                         {
@@ -175,6 +219,28 @@ impl eframe::App for Noisette {
                                                     .spawn();
                                             }
                                         } 
+                                    
+                                        #[cfg(target_arch = "wasm32")]
+                                        {
+                                            if let Some(data) = &sound.data {
+                                                let array = Uint8Array::from(data.as_slice());
+
+                                                let bag = BlobPropertyBag::new();
+                                                bag.set_type("audio/wav"); // o audio/mp3, ecc
+
+                                                let blob = Blob::new_with_u8_array_sequence_and_options(&js_sys::Array::of1(&array.into()), &bag).unwrap();
+                                                let url = Url::create_object_url_with_blob(&blob).unwrap();
+
+                                                let window = web_sys::window().unwrap();
+                                                let document = window.document().unwrap();
+                                                let a = document.create_element("a").unwrap().dyn_into::<web_sys::HtmlAnchorElement>().unwrap();
+                                                a.set_href(&url);
+                                                a.set_download(file_name);
+                                                a.click();
+
+                                                Url::revoke_object_url(&url).unwrap();
+                                            }
+                                        }
                                     };
                                 },
                                 None => {
@@ -183,12 +249,19 @@ impl eframe::App for Noisette {
                             };
 
                             if ui.add_sized([col_width, 20.0], egui::Button::new("Select File")).clicked() {
-                                if let Some(path) = rfd::FileDialog::new()
-                                    .add_filter("Audio files", &["mp3", "wav"])
-                                    .pick_file()
+                                #[cfg(not(target_arch = "wasm32"))]
                                 {
-                                    sound.path = Some(path.display().to_string());
+                                    if let Some(path) = rfd::FileDialog::new()
+                                        .add_filter("Audio files", &["mp3", "wav"])
+                                        .pick_file()
+                                    {
+                                        sound.path = Some(path.display().to_string());
+                                    }
                                 }
+                                #[cfg(target_arch = "wasm32")] 
+                                {
+                                    trigger_file_picker(idx);
+                                } 
                             }
 
                             if ui.add_sized([col_width, 20.0], egui::Button::new("Save")).clicked() {
@@ -250,7 +323,29 @@ impl eframe::App for Noisette {
                                                     .arg(parent)
                                                     .spawn();
                                             }
-                                        } 
+                                        }
+                                        
+                                        #[cfg(target_arch = "wasm32")]
+                                        {
+                                            if let Some(data) = &sound.data {
+                                                let array = Uint8Array::from(data.as_slice());
+
+                                                let bag = BlobPropertyBag::new();
+                                                bag.set_type("audio/wav"); // o audio/mp3, ecc
+
+                                                let blob = Blob::new_with_u8_array_sequence_and_options(&js_sys::Array::of1(&array.into()), &bag).unwrap();
+                                                let url = Url::create_object_url_with_blob(&blob).unwrap();
+
+                                                let window = web_sys::window().unwrap();
+                                                let document = window.document().unwrap();
+                                                let a = document.create_element("a").unwrap().dyn_into::<web_sys::HtmlAnchorElement>().unwrap();
+                                                a.set_href(&url);
+                                                a.set_download(file_name);
+                                                a.click();
+
+                                                Url::revoke_object_url(&url).unwrap();
+                                            }
+                                        }
                                     };
                                 },
                                 None => {
@@ -258,7 +353,9 @@ impl eframe::App for Noisette {
                                 }
                             };
 
-                            ui.add_sized([col_width, 20.0], egui::Button::new("Play"));
+                            if ui.add_sized([col_width, 20.0], egui::Button::new("Play")).clicked() {
+
+                            }
 
                             if ui.add_sized([col_width, 20.0], egui::Button::new("Edit")).clicked() {
                                 sound.editing = true;

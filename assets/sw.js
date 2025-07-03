@@ -1,9 +1,9 @@
-var cacheName = 'egui-template-pwa';
+var cacheName = 'noisette';
 var filesToCache = [
   './',
   './index.html',
-  './eframe_template.js',
-  './eframe_template_bg.wasm',
+  './noisette.js',
+  './noisette_bg.wasm',
 ];
 
 /* Start the service worker and cache all of the app's content */
@@ -23,3 +23,5 @@ self.addEventListener('fetch', function (e) {
     })
   );
 });
+
+

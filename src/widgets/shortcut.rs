@@ -1,4 +1,4 @@
-use egui::{KeyboardShortcut, Key, Modifiers, Response, Ui, Widget};
+use egui::{KeyboardShortcut, Modifiers, Response, Ui, Widget};
 
 pub struct ShortcutRecorder<'a> {
     pub shortcut: &'a mut Option<KeyboardShortcut>,
