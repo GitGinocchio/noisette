@@ -3,6 +3,8 @@
 //#[cfg(not(target_arch = "wasm32"))]
 //use rfd::FileDialog;
 
+use std::sync::{mpsc::{self, Receiver, Sender}, Arc, Mutex};
+
 #[cfg(target_arch = "wasm32")]
 use {
     std::cell::RefCell,
@@ -12,9 +14,11 @@ use {
     js_sys::Uint8Array,
 };
 
-
-
-use crate::widgets::shortcut::ShortcutRecorder;
+use crate::audio::{interface::AudioBackend, PlatformAudio};
+use crate::shortcut::interface::ShortcutListener;
+use crate::shortcut::keycodes::SerializableKeycode;
+use crate::shortcut::{PlatformShortcutListener};
+use crate::widgets::ShortcutRecorder;
 use crate::sound::Sound;
 use crate::utils::*;
 
@@ -23,12 +27,26 @@ use crate::utils::*;
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
 pub struct Noisette {
     // Example stuff:
-    sounds: Vec<Sound>,
+    sounds: Arc<Mutex<Vec<Sound>>>,
+
+    #[serde(skip)]
+    audio: PlatformAudio,
+    #[serde(skip)]
+    last_pressed_keys: Option<Vec<SerializableKeycode>>,
+    #[serde(skip)]
+    shortcut_listener: Option<PlatformShortcutListener>,
+    #[serde(skip)]
+    sl_sender: Sender<usize>,
+    #[serde(skip)]
+    sl_receiver: Receiver<usize>,
 
     // #[serde(skip)] // This how you opt-out of serialization of a field
 
     #[serde(skip)]
     show_add_window: bool,
+
+    #[serde(skip)]
+    current_playing: Option<usize>,
     
     dragging_index: Option<usize>,
     listening_shortcut: Option<usize>
@@ -36,11 +54,22 @@ pub struct Noisette {
 
 impl Default for Noisette {
     fn default() -> Self {
+        let sounds = Arc::new(Mutex::new(Vec::new()));
+        let (tx, rx) = mpsc::channel::<usize>();
         Self {
-            sounds: Vec::new(),
+            sounds: sounds,
             show_add_window: false,
             listening_shortcut: None,
-            dragging_index: None
+            dragging_index: None,
+            audio: PlatformAudio::new(),
+            current_playing: None,
+            shortcut_listener: Some(PlatformShortcutListener::new(
+            Arc::clone(sounds),
+            tx,
+            )),
+            last_pressed_keys: None,
+            sl_sender: tx,
+            sl_receiver: rx
         }
     }
 }
@@ -57,7 +86,12 @@ impl Noisette {
             return eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
         }
 
-        Default::default()
+        let mut noisette = Noisette::default();
+        noisette.shortcut_listener = Some(PlatformShortcutListener::new(
+            Arc::clone(&noisette.sounds),
+            noisette.sl_sender,
+        ));
+        return noisette;
     }
 }
 
@@ -87,6 +121,9 @@ impl eframe::App for Noisette {
         // Put your widgets into a `SidePanel`, `TopBottomPanel`, `CentralPanel`, `Window` or `Area`.
         // For inspiration and more examples, go to https://emilk.github.io/egui
 
+        let mut audio = self.audio.lock().unwrap();
+        let mut sounds = self.sounds.lock().unwrap();
+
         #[cfg(target_arch = "wasm32")]
         {
             LAST_SOUND.with(|slot| {
@@ -103,6 +140,9 @@ impl eframe::App for Noisette {
             });
         }
 
+        if self.current_playing.is_some() && (!audio.is_playing()) {
+            self.current_playing = None;
+        }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             // The top panel is often a good place for a menu bar:
@@ -124,7 +164,7 @@ impl eframe::App for Noisette {
                 if ui.button("Add").clicked() {
                     let mut default_sound = Sound::default();
                     default_sound.editing = true;
-                    self.sounds.push(default_sound);
+                    sounds.push(default_sound);
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -140,7 +180,7 @@ impl eframe::App for Noisette {
 
             let col_width = (width / 6.0) - 10.0;
 
-            egui::Grid::new("tabella_suoni")
+            egui::Grid::new("sounds")
                 .striped(true)
                 .show(ui, |ui| {
                     ui.add_sized([col_width, 20.0], egui::widgets::Label::new("Name"));
@@ -156,13 +196,21 @@ impl eframe::App for Noisette {
                     // Per il drag and drop:
                     // https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/drag_and_drop.rs
 
-                    for idx in 0..self.sounds.len() {
-                        let sound = &mut self.sounds[idx];
+                    for idx in 0..sounds.len() {
+                        let sound = &mut sounds[idx];
 
                         //let drag_id = egui::Id::new(format!("drag_sound_{}", idx));
                         //let is_dragging = ctx.is_being_dragged(drag_id);
 
                         //let row_start = ui.cursor().min;
+
+                        /*
+                        if let Some(shortcut) = &sound.shortcut && 
+                           self.shortcut_listener.is_pressed(shortcut) &&
+                           !(audio.is_playing()) {
+                            audio.play(sound);
+                        }
+                        */
 
                         if sound.editing {
                             if sound.name.is_none() {
@@ -180,7 +228,9 @@ impl eframe::App for Noisette {
                                 ShortcutRecorder::new(
                                 &mut sound.shortcut,
                                 &mut self.listening_shortcut,
+                                &mut self.last_pressed_keys,
                                 idx,
+
                             ));
 
                             match sound.path.as_deref() {
@@ -283,7 +333,7 @@ impl eframe::App for Noisette {
 
                             ui.add_sized([col_width, 20.0], egui::Label::new(sound_name));
 
-                            ui.add_sized([col_width, 20.0], egui::Label::new(&sound.shortcut.map_or_else(
+                            ui.add_sized([col_width, 20.0], egui::Label::new(&sound.shortcut.clone().map_or_else(
                                 || "No Shortcut".to_string(),
                                 |s| shortcut_as_string(&s),
                             )));
@@ -353,8 +403,17 @@ impl eframe::App for Noisette {
                                 }
                             };
 
-                            if ui.add_sized([col_width, 20.0], egui::Button::new("Play")).clicked() {
-
+                            if self.current_playing == Some(idx) {
+                                if ui.add_sized([col_width, 20.0], egui::Button::new("Stop")).clicked() {
+                                    audio.stop();
+                                    self.current_playing = None;
+                                }
+                            }
+                            else {
+                                if ui.add_sized([col_width, 20.0], egui::Button::new("Play")).clicked() {
+                                    audio.play(sound);
+                                    self.current_playing = Some(idx);
+                                }
                             }
 
                             if ui.add_sized([col_width, 20.0], egui::Button::new("Edit")).clicked() {
@@ -370,14 +429,14 @@ impl eframe::App for Noisette {
                     }
 
                 if let Some(idx) = to_remove {
-                    self.sounds.remove(idx);
+                    sounds.remove(idx);
                 }
             });
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 egui::warn_if_debug_build(ui);
                 if ui.button("Clear Data").clicked() {
-                    self.sounds.clear();
+                    sounds.clear();
                 }
             });
         });

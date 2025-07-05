@@ -1,20 +1,17 @@
+use crate::shortcut::keycodes::SerializableKeycode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RowLocation {
     pub row: usize,
 }
 
-pub fn shortcut_as_string(sc: &egui::KeyboardShortcut) -> String {
-    let mut parts = Vec::new();
-    let m = &sc.modifiers;
-    if m.ctrl { parts.push("Ctrl"); }
-    if m.alt { parts.push("Alt"); }
-    if m.shift { parts.push("Shift"); }
-    if m.mac_cmd || m.command { parts.push("Cmd"); }
-    let key_string = &format!("{:?}", sc.logical_key);
-    parts.push(&key_string);
-    parts.join("+")
+pub fn shortcut_as_string(keys: &[SerializableKeycode]) -> String {
+    keys.iter()
+        .map(|k| format!("{}", k.0).trim_matches('"').to_string())
+        .collect::<Vec<_>>()
+        .join(" + ")
 }
+
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

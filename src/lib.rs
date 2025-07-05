@@ -7,7 +7,10 @@ mod app;
 pub use app::Noisette;
 
 mod widgets;
-pub use widgets::shortcut;
 
 mod utils;
 pub use utils::*;
+
+pub mod audio;
+
+pub mod shortcut;
