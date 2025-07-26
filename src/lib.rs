@@ -11,6 +11,9 @@ mod widgets;
 mod utils;
 pub use utils::*;
 
+pub mod helpers;
+pub use helpers::*;
+
 pub mod audio;
 
 pub mod shortcut;

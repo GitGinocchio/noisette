@@ -1,6 +1,6 @@
 {
-  "name": "egui Template PWA",
-  "short_name": "egui-template-pwa",
+  "name": "Noisette",
+  "short_name": "noisette",
   "icons": [
     {
       "src": "./assets/icon-256.png",

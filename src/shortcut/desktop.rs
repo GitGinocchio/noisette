@@ -1,64 +1,54 @@
-use std::sync::{Arc, Mutex, mpsc};
-use std::thread;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
 
 use device_query::{DeviceQuery, DeviceState};
 
 use crate::shortcut::keycodes::SerializableKeycode;
-use crate::Sound;
+use crate::shortcut::interface::ShortcutListener;
 
 pub struct DesktopShortcutListener {
     pressed_keys: Arc<Mutex<Vec<SerializableKeycode>>>
 }
 
 impl DesktopShortcutListener {
-    pub fn new(
-        sounds: Arc<Mutex<Vec<Sound>>>,
-        sender: mpsc::Sender<usize>,
-    ) -> Self {
+    pub fn new() -> Self {
         let keys = Arc::new(Mutex::new(Vec::new()));
-        let keys_clone = Arc::clone(&keys);
-        let sounds = Arc::clone(&sounds);
-
-        thread::spawn(move || {
-            let device_state = DeviceState::new();
-            let mut last_played: Option<Vec<SerializableKeycode>> = None;
-
-            loop {
-                let current_keys: Vec<SerializableKeycode> = device_state
-                    .get_keys()
-                    .into_iter()
-                    .map(SerializableKeycode)
-                    .collect();
-
-                if let Ok(mut keys_lock) = keys_clone.lock() {
-                    *keys_lock = current_keys.clone();
-                }
-
-                if let Ok(sounds) = sounds.lock() {
-                    for (idx, sound) in sounds.iter().enumerate() {
-                        if let Some(shortcut) = &sound.shortcut {
-                            let all_pressed = shortcut.iter().all(|k| current_keys.contains(k));
-                            let already_played = Some(shortcut.clone()) == last_played;
-
-                            if all_pressed && !already_played {
-                                let _ = sender.send(idx); // invia messaggio di play
-                                last_played = Some(shortcut.clone());
-                            }
-
-                            if current_keys.is_empty() {
-                                last_played = None;
-                            }
-                        }
-                    }
-                }
-
-                thread::sleep(Duration::from_millis(50));
-            }
-        });
+        //let keys_clone = Arc::clone(&keys);
 
         Self {
             pressed_keys: keys
+        }
+    }
+
+    pub fn update(&mut self) {
+        let device_state = DeviceState::new();
+        let keys_clone = Arc::clone(&self.pressed_keys);
+
+        let current_keys: Vec<SerializableKeycode> = device_state
+            .get_keys()
+            .into_iter()
+            .map(|k| SerializableKeycode::from(k))
+            .collect();
+
+        if let Ok(mut keys_lock) = keys_clone.lock() {
+            *keys_lock = current_keys.clone();
+        }
+    }
+
+    pub fn get_pressed_keys(&self) -> Vec<SerializableKeycode> {
+        if let Ok(keys_guard) = self.pressed_keys.lock() {
+            keys_guard.clone()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+impl ShortcutListener for DesktopShortcutListener {
+    fn is_pressed(&self, shortcut: &Vec<SerializableKeycode>) -> bool {
+        if let Ok(pressed) = self.pressed_keys.lock() {
+            shortcut.iter().all(|k| pressed.contains(k))
+        } else {
+            false // non riesce a ottenere il lock? -> non premuto
         }
     }
 }

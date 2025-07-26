@@ -7,7 +7,6 @@ pub struct Sound {
     pub path: Option<String>,
     pub shortcut: Option<Vec<SerializableKeycode>>,
     pub editing: bool,
-    pub playing: bool,
     pub data: Option<Vec<u8>>,
 }
 
@@ -18,7 +17,6 @@ impl Default for Sound {
             path: None,
             shortcut: None,
             editing: true,
-            playing: false,
             data: None
         }
     }

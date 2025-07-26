@@ -1,4 +1,4 @@
-use crate::shortcut::keycodes::SerializableKeycode;
+use crate::{shortcut::keycodes::SerializableKeycode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RowLocation {
@@ -7,11 +7,10 @@ pub struct RowLocation {
 
 pub fn shortcut_as_string(keys: &[SerializableKeycode]) -> String {
     keys.iter()
-        .map(|k| format!("{}", k.0).trim_matches('"').to_string())
+        .map(|k| format!("{}", k).trim_matches('"').to_string())
         .collect::<Vec<_>>()
-        .join(" + ")
+        .join("+")
 }
-
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

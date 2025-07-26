@@ -1,0 +1,13 @@
+{
+  /*
+  //"rust-analyzer.cargo.target": "wasm32-unknown-unknown",
+  "rust-analyzer.cargo.channel": "nightly",
+  "rust-analyzer.cargo.target": "nightly-x86_64-pc-windows-msvc",
+  "rust-analyzer.checkOnSave.command": "clippy",
+  "rust-analyzer.cargo.allFeatures": true,
+  "rust-analyzer.procMacro.enable": true,
+  "rust-analyzer.diagnostics.disabled": [
+    "unresolved-proc-macro"  // utile per problemi comuni con macro su WASM
+  ]
+  */
+}

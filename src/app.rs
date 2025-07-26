@@ -1,9 +1,8 @@
-//use egui::{KeyboardShortcut, Pos2};
+// use egui::{KeyboardShortcut, Pos2};
+// #[cfg(not(target_arch = "wasm32"))]
+// use rfd::FileDialog;
 
-//#[cfg(not(target_arch = "wasm32"))]
-//use rfd::FileDialog;
-
-use std::sync::{mpsc::{self, Receiver, Sender}, Arc, Mutex};
+use std::{collections::HashSet, sync::{Arc, Mutex}, thread, time::{Duration}};
 
 #[cfg(target_arch = "wasm32")]
 use {
@@ -14,84 +13,139 @@ use {
     js_sys::Uint8Array,
 };
 
-use crate::audio::{interface::AudioBackend, PlatformAudio};
-use crate::shortcut::interface::ShortcutListener;
+use crate::{audio::{interface::AudioBackend, PlatformAudioHandler}, show_file_label_with_click};
+use crate::shortcut::{interface::ShortcutListener, PlatformShortcutListener};
 use crate::shortcut::keycodes::SerializableKeycode;
-use crate::shortcut::{PlatformShortcutListener};
-use crate::widgets::ShortcutRecorder;
+use crate::widgets::shortcut::PlatformShortcutRecorder;
+use crate::widgets::settings::SettingsWindow;
 use crate::sound::Sound;
 use crate::utils::*;
 
-/// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
-#[serde(default)] // if we add new fields, give them default values when deserializing old state
+#[serde(default)]
 pub struct Noisette {
-    // Example stuff:
     sounds: Arc<Mutex<Vec<Sound>>>,
 
     #[serde(skip)]
-    audio: PlatformAudio,
+    audio: Arc<Mutex<PlatformAudioHandler>>,
     #[serde(skip)]
     last_pressed_keys: Option<Vec<SerializableKeycode>>,
     #[serde(skip)]
-    shortcut_listener: Option<PlatformShortcutListener>,
-    #[serde(skip)]
-    sl_sender: Sender<usize>,
-    #[serde(skip)]
-    sl_receiver: Receiver<usize>,
+    shortcut_listener: Arc<Mutex<PlatformShortcutListener>>,
 
-    // #[serde(skip)] // This how you opt-out of serialization of a field
+    settings: Arc<Mutex<SettingsWindow>>,
 
     #[serde(skip)]
-    show_add_window: bool,
-
-    #[serde(skip)]
-    current_playing: Option<usize>,
-    
+    current_playing: Arc<Mutex<HashSet<usize>>>,
     dragging_index: Option<usize>,
     listening_shortcut: Option<usize>
 }
 
 impl Default for Noisette {
     fn default() -> Self {
-        let sounds = Arc::new(Mutex::new(Vec::new()));
-        let (tx, rx) = mpsc::channel::<usize>();
         Self {
-            sounds: sounds,
-            show_add_window: false,
+            sounds: Arc::new(Mutex::new(Vec::new())),
+            settings: Arc::new(Mutex::new(SettingsWindow::default())),
             listening_shortcut: None,
             dragging_index: None,
-            audio: PlatformAudio::new(),
-            current_playing: None,
-            shortcut_listener: Some(PlatformShortcutListener::new(
-            Arc::clone(sounds),
-            tx,
-            )),
+            audio: Arc::new(Mutex::new(PlatformAudioHandler::new())),
+            current_playing: Arc::new(Mutex::new(HashSet::new())),
+            shortcut_listener: Arc::new(Mutex::new(PlatformShortcutListener::new())),
             last_pressed_keys: None,
-            sl_sender: tx,
-            sl_receiver: rx
         }
     }
 }
 
 impl Noisette {
-    /// Called once before the first frame.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // This is also where you can customize the look and feel of egui using
-        // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
+        let instance = if let Some(storage) = cc.storage {
+            let instance: Noisette = eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
 
-        // Load previous app state (if any).
-        // Note that you must enable the `persistence` feature for this to work.
-        if let Some(storage) = cc.storage {
-            return eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
+            if let Ok(settings) = instance.settings.lock() && let Some(device_name) = settings.selected_device_name.clone() {
+                if let Ok(mut audio) = instance.audio.lock() {
+                    audio.set_device(Some(device_name));
+                }
+            }
+
+            instance
+        } else {
+            Noisette::default()
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let shortcut_listener = Arc::clone(&instance.shortcut_listener);
+            let sounds = Arc::clone(&instance.sounds);
+            let audio = Arc::clone(&instance.audio);
+            let settings = Arc::clone(&instance.settings);
+            let current_playing = Arc::clone(&instance.current_playing);
+
+            thread::spawn(move || {
+
+                loop {
+                    if let (Ok(mut listener), Ok(mut sounds)) = (shortcut_listener.lock(), sounds.lock()) {
+                        listener.update();
+
+                        for idx in 0..sounds.len() {
+                            let sound = &mut sounds[idx];
+
+                            if let Some(shortcut) = &sound.shortcut 
+                            && let Ok(audio) = &mut audio.lock() 
+                            && let Ok(mut current_playing) = current_playing.lock() {
+                                if !listener.is_pressed(&shortcut) {
+                                    // Se non e' premuta la shortcut del suono non fare nulla
+                                    continue;
+                                };
+
+                                if sound.editing {
+                                    // Se il suono e' in modalita' modifica non fare nulla
+                                    continue;
+                                }
+
+                                if audio.is_playing() {
+                                    // Se c'e' gia' un suono in riproduzione
+                                    if let Ok(settings) = settings.lock() {
+                                        if settings.toggle_to_stop && current_playing.contains(&idx) {
+                                            // e c'e' l'opzione di premere una seconda volta per stoppare l'audio
+                                            // e l'audio attuale e' uguale a quello in riproduzione
+                                            audio.stop(sound);
+                                            current_playing.remove(&idx);
+                                            thread::sleep(Duration::from_millis(1000));
+                                            continue;
+                                        }
+
+                                        if settings.stop_on_new  && !current_playing.contains(&idx) {
+                                            // e c'e' l'opzione di premere un altra shortcut per iniziare un altro audi
+                                            // e l'audio attuale e' diverso da quello in riproduzione
+
+                                            current_playing.insert(idx);
+                                            audio.play(sound);
+                                            thread::sleep(Duration::from_millis(1000));
+                                            continue;
+                                        }
+                                    }
+
+                                    continue;
+                                }
+
+                                // Se non c'e' nessun audio in riproduzione
+                                // e il suono attuale e' premuto
+                                // e il suono attuale non e' in modalita' modifica
+
+                                current_playing.insert(idx);
+                                audio.play(sound);
+                                thread::sleep(Duration::from_millis(1000));
+                                break;
+                            }
+                        }
+                    }
+
+                    thread::sleep(Duration::from_millis(50));
+                }
+            });
         }
 
-        let mut noisette = Noisette::default();
-        noisette.shortcut_listener = Some(PlatformShortcutListener::new(
-            Arc::clone(&noisette.sounds),
-            noisette.sl_sender,
-        ));
-        return noisette;
+        instance
     }
 }
 
@@ -110,61 +164,42 @@ pub fn handle_file(row : usize, name: String, data: Uint8Array) {
 }
 
 impl eframe::App for Noisette {
-    /// Called by the frame work to save state before shutdown.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        println!("Saving!");
         eframe::set_value(storage, eframe::APP_KEY, self);
     }
 
-    /// Called each time the UI needs repainting, which may be many times per second.
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Put your widgets into a `SidePanel`, `TopBottomPanel`, `CentralPanel`, `Window` or `Area`.
-        // For inspiration and more examples, go to https://emilk.github.io/egui
-
-        let mut audio = self.audio.lock().unwrap();
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let mut sounds = self.sounds.lock().unwrap();
+        let mut audio = self.audio.lock().unwrap();
 
         #[cfg(target_arch = "wasm32")]
         {
             LAST_SOUND.with(|slot| {
                 if let Some((row, name, data)) = slot.borrow_mut().take() {
-                    if let Some(sound) = self.sounds.get_mut(row) {
-                        let sound: &mut Sound = sound;
+                    if let Some(sound) = sounds.get_mut(row) {
                         sound.path = Some(name);
                         sound.data = Some(data.to_vec());
-                    } else {
-                        // Index non valido (es. fuori range)
-                        eprintln!("Errore: index {} fuori dai limiti di sounds (len = {})", row, self.sounds.len());
                     }
                 }
             });
         }
 
-        if self.current_playing.is_some() && (!audio.is_playing()) {
-            self.current_playing = None;
+        if let Ok(mut settings) = self.settings.lock() && let Some(new_device) = &mut settings.new_device {
+            println!("Device changed to: {new_device}");
+            audio.set_device(Some(new_device.clone()));
+            settings.new_device = None;
         }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            // The top panel is often a good place for a menu bar:
-
             egui::menu::bar(ui, |ui| {
-                // NOTE: no File->Quit on web pages!
-                /*
-                let is_web = cfg!(target_arch = "wasm32");
-                if !is_web {
-                    ui.menu_button("File", |ui| {
-                        if ui.button("Quit").clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                    });
-                    ui.add_space(16.0);
-                }
-                */
-
                 if ui.button("Add").clicked() {
                     let mut default_sound = Sound::default();
                     default_sound.editing = true;
                     sounds.push(default_sound);
+                }
+
+                if ui.button("Settings").clicked() && let Ok(mut settings) = self.settings.lock() {
+                    settings.open = !settings.open;
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -174,268 +209,133 @@ impl eframe::App for Noisette {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            // The central panel the region left after adding TopPanel's and SidePanel's
-            let width = ui.available_width();
-            //let height = ui.available_height();
+            let column_count = 6;
 
-            let col_width = (width / 6.0) - 10.0;
+            ui.columns(column_count, |columns| {
+                columns[0].add_sized([0.0, 2.0],egui::Label::new("Name"));
+                columns[1].add_sized([0.0, 2.0],egui::Label::new("Shortcut"));
+                columns[2].add_sized([0.0, 2.0],egui::Label::new("File"));
+                columns[3].add_sized([0.0, 2.0],egui::Label::new("Select / Play"));
+                columns[4].add_sized([0.0, 2.0],egui::Label::new("Edit / Save"));
+                columns[5].add_sized([0.0, 2.0],egui::Label::new("Remove"));
+            });
+            ui.separator();
 
-            egui::Grid::new("sounds")
-                .striped(true)
+            let mut to_remove = None;
+
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2]) // evita che si restringa troppo
                 .show(ui, |ui| {
-                    ui.add_sized([col_width, 20.0], egui::widgets::Label::new("Name"));
-                    ui.add_sized([col_width, 20.0], egui::widgets::Label::new("Shortcut"));
-                    ui.add_sized([col_width, 20.0], egui::widgets::Label::new("File"));
-                    ui.add_sized([col_width, 20.0],egui::widgets::Label::new("Select File / Play"));
-                    ui.add_sized([col_width, 20.0],egui::widgets::Label::new("Edit / Save"));
-                    ui.add_sized([col_width, 20.0],egui::widgets::Label::new("Remove"));
-                    ui.end_row();
-
-                    let mut to_remove = None;
-
-                    // Per il drag and drop:
-                    // https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/src/demo/drag_and_drop.rs
-
                     for idx in 0..sounds.len() {
                         let sound = &mut sounds[idx];
-
-                        //let drag_id = egui::Id::new(format!("drag_sound_{}", idx));
-                        //let is_dragging = ctx.is_being_dragged(drag_id);
-
-                        //let row_start = ui.cursor().min;
-
-                        /*
-                        if let Some(shortcut) = &sound.shortcut && 
-                           self.shortcut_listener.is_pressed(shortcut) &&
-                           !(audio.is_playing()) {
-                            audio.play(sound);
-                        }
-                        */
-
-                        if sound.editing {
-                            if sound.name.is_none() {
-                                sound.name = Some(String::new());
-                            }
-
-                            ui.add_sized(
-                                [col_width, 20.0],
-                                egui::TextEdit::singleline(sound.name.as_mut().unwrap())
-                                    .hint_text("Write a name here"),
-                            );
-
-                            ui.add_sized(
-                                [col_width, 20.0],
-                                ShortcutRecorder::new(
-                                &mut sound.shortcut,
-                                &mut self.listening_shortcut,
-                                &mut self.last_pressed_keys,
-                                idx,
-
-                            ));
-
-                            match sound.path.as_deref() {
-                                Some(path) => {
-                                    let path = std::path::Path::new(path);
-
-                                    let file_name = match path.file_name().and_then(|n| n.to_str()) {
-                                        Some(file_name) => file_name,
-                                        None => "No file"
-                                    };
-                                    
-                                    if ui.add_sized([col_width, 20.0], egui::Button::new(file_name)).clicked() {
-                                        #[cfg(target_os = "windows")]
-                                        {
-                                            if let Some(path_str) = path.to_str() {
-                                                let _ = std::process::Command::new("explorer")
-                                                    .arg("/select,")
-                                                    .arg(path_str)
-                                                    .spawn();
-                                            }
-                                        }
-
-                                        #[cfg(target_os = "macos")]
-                                        {
-                                            let _ = std::process::Command::new("open")
-                                                .arg("-R")
-                                                .arg(path)
-                                                .spawn();
-                                        }
-
-                                        #[cfg(target_os = "linux")]
-                                        {
-                                            if let Some(parent) = path.parent() {
-                                                let _ = std::process::Command::new("xdg-open")
-                                                    .arg(parent)
-                                                    .spawn();
-                                            }
-                                        } 
-                                    
-                                        #[cfg(target_arch = "wasm32")]
-                                        {
-                                            if let Some(data) = &sound.data {
-                                                let array = Uint8Array::from(data.as_slice());
-
-                                                let bag = BlobPropertyBag::new();
-                                                bag.set_type("audio/wav"); // o audio/mp3, ecc
-
-                                                let blob = Blob::new_with_u8_array_sequence_and_options(&js_sys::Array::of1(&array.into()), &bag).unwrap();
-                                                let url = Url::create_object_url_with_blob(&blob).unwrap();
-
-                                                let window = web_sys::window().unwrap();
-                                                let document = window.document().unwrap();
-                                                let a = document.create_element("a").unwrap().dyn_into::<web_sys::HtmlAnchorElement>().unwrap();
-                                                a.set_href(&url);
-                                                a.set_download(file_name);
-                                                a.click();
-
-                                                Url::revoke_object_url(&url).unwrap();
-                                            }
-                                        }
-                                    };
-                                },
-                                None => {
-                                    ui.add_sized([col_width, 20.0], egui::Label::new("No File"));
+                        ui.columns(column_count, |columns| {
+                            if sound.editing {
+                                if sound.name.is_none() {
+                                    sound.name = Some(String::new());
                                 }
-                            };
 
-                            if ui.add_sized([col_width, 20.0], egui::Button::new("Select File")).clicked() {
-                                #[cfg(not(target_arch = "wasm32"))]
-                                {
-                                    if let Some(path) = rfd::FileDialog::new()
-                                        .add_filter("Audio files", &["mp3", "wav"])
-                                        .pick_file()
+                                // Name
+                                columns[0].horizontal(|ui| {
+                                    ui.text_edit_singleline(sound.name.as_mut().unwrap());
+                                });
+
+                                // ShortcutRecorder
+                                columns[1].add_sized(
+                                    [0.0, 2.0],
+                                    PlatformShortcutRecorder::new(
+                                        &mut sound.shortcut,
+                                        &mut self.listening_shortcut,
+                                        &mut self.last_pressed_keys,
+                                        idx
+                                ));
+
+                                show_file_label_with_click(&mut columns[2], sound);
+
+                                // Select File
+                                if columns[3].add_sized([0.0, 2.0],egui::Button::new("Select File").min_size(egui::Vec2::ZERO)).clicked() {
+                                    #[cfg(not(target_arch = "wasm32"))]
                                     {
-                                        sound.path = Some(path.display().to_string());
+                                        if let Some(path) = rfd::FileDialog::new().add_filter("Audio", &["mp3", "wav"]).pick_file() {
+                                            sound.path = Some(path.display().to_string());
+                                        }
+                                    }
+                                    #[cfg(target_arch = "wasm32")]
+                                    {
+                                        trigger_file_picker(idx);
                                     }
                                 }
-                                #[cfg(target_arch = "wasm32")] 
-                                {
-                                    trigger_file_picker(idx);
-                                } 
-                            }
 
-                            if ui.add_sized([col_width, 20.0], egui::Button::new("Save")).clicked() {
-                                sound.editing = false;
-                            }
-
-                            if ui.add_sized([col_width, 20.0], egui::Button::new("Remove")).clicked() {
-                                to_remove = Some(idx);
-                            }
-                        } 
-                        else {
-                            let sound_name = match sound.name.as_deref() {
-                                Some(string) => {
-                                    if string.chars().count() > 0 { string }
-                                    else { "No Name" }
+                                // Save
+                                if columns[4].add_sized([0.0, 2.0],egui::Button::new("Save").min_size(egui::Vec2::ZERO)).clicked() {
+                                    sound.editing = false;
                                 }
-                                None => "No Name"
-                            };
 
-                            ui.add_sized([col_width, 20.0], egui::Label::new(sound_name));
-
-                            ui.add_sized([col_width, 20.0], egui::Label::new(&sound.shortcut.clone().map_or_else(
-                                || "No Shortcut".to_string(),
-                                |s| shortcut_as_string(&s),
-                            )));
-
-                            match sound.path.as_deref() {
-                                Some(path) => {
-                                    let path = std::path::Path::new(path);
-
-                                    let file_name = match path.file_name().and_then(|n| n.to_str()) {
-                                        Some(file_name) => file_name,
-                                        None => "No file"
-                                    };
-
-                                    if ui.add_sized([col_width, 20.0], egui::Button::new(file_name)).clicked() {
-                                        #[cfg(target_os = "windows")]
-                                        {
-                                            if let Some(path_str) = path.to_str() {
-                                                let _ = std::process::Command::new("explorer")
-                                                    .arg("/select,")
-                                                    .arg(path_str)
-                                                    .spawn();
-                                            }
-                                        }
-
-                                        #[cfg(target_os = "macos")]
-                                        {
-                                            let _ = std::process::Command::new("open")
-                                                .arg("-R")
-                                                .arg(path)
-                                                .spawn();
-                                        }
-
-                                        #[cfg(target_os = "linux")]
-                                        {
-                                            if let Some(parent) = path.parent() {
-                                                let _ = std::process::Command::new("xdg-open")
-                                                    .arg(parent)
-                                                    .spawn();
-                                            }
-                                        }
-                                        
-                                        #[cfg(target_arch = "wasm32")]
-                                        {
-                                            if let Some(data) = &sound.data {
-                                                let array = Uint8Array::from(data.as_slice());
-
-                                                let bag = BlobPropertyBag::new();
-                                                bag.set_type("audio/wav"); // o audio/mp3, ecc
-
-                                                let blob = Blob::new_with_u8_array_sequence_and_options(&js_sys::Array::of1(&array.into()), &bag).unwrap();
-                                                let url = Url::create_object_url_with_blob(&blob).unwrap();
-
-                                                let window = web_sys::window().unwrap();
-                                                let document = window.document().unwrap();
-                                                let a = document.create_element("a").unwrap().dyn_into::<web_sys::HtmlAnchorElement>().unwrap();
-                                                a.set_href(&url);
-                                                a.set_download(file_name);
-                                                a.click();
-
-                                                Url::revoke_object_url(&url).unwrap();
-                                            }
-                                        }
-                                    };
-                                },
-                                None => {
-                                    ui.add_sized([col_width, 20.0], egui::Label::new("No File"));
+                                // Remove
+                                if columns[5].add_sized([0.0, 2.0], egui::Button::new("Remove").min_size(egui::Vec2::ZERO)).clicked() {
+                                    to_remove = Some(idx);
                                 }
-                            };
+                            } else {
+                                let label = sound.name.as_deref().filter(|s| !s.is_empty()).unwrap_or("No Name");
 
-                            if self.current_playing == Some(idx) {
-                                if ui.add_sized([col_width, 20.0], egui::Button::new("Stop")).clicked() {
-                                    audio.stop();
-                                    self.current_playing = None;
+                                // Name
+                                columns[0].add_sized(
+                                    [0.0, 2.0],
+                                    egui::Label::new(label).wrap_mode(egui::TextWrapMode::Truncate)
+                                );
+
+                                // Shortcut
+                                columns[1].add_sized(
+                                    [0.0, 2.0],
+                                    egui::Label::new(&sound.shortcut
+                                        .clone()
+                                        .map_or("No Shortcut".to_string(), |s| shortcut_as_string(&s)))
+                                        .wrap_mode(egui::TextWrapMode::Truncate)
+                                );
+
+                                // File name
+                                show_file_label_with_click(&mut columns[2], sound);
+
+                                // Play / Stop button
+                                if let Ok(mut current_playing) = self.current_playing.lock() {
+                                    if current_playing.contains(&idx) {
+                                        if columns[3].add_sized([0.0, 2.0], egui::Button::new("Stop")).clicked() {
+                                            audio.stop(sound);
+                                            current_playing.remove(&idx);
+                                        }
+                                    } else {
+                                        if columns[3].add_sized([0.0, 2.0], egui::Button::new("Play")).clicked() {
+                                            audio.play(sound);
+                                            current_playing.insert(idx);
+                                        }
+                                    }
+                                }
+
+                                // Edit
+                                if columns[4].add_sized([0.0, 2.0],egui::Button::new("Edit")).clicked() {
+                                    sound.editing = true;
+                                }
+
+                                // Remove
+                                if columns[5].add_sized([0.0, 2.0],egui::Button::new("Remove")).clicked() {
+                                    to_remove = Some(idx);
                                 }
                             }
-                            else {
-                                if ui.add_sized([col_width, 20.0], egui::Button::new("Play")).clicked() {
-                                    audio.play(sound);
-                                    self.current_playing = Some(idx);
-                                }
-                            }
-
-                            if ui.add_sized([col_width, 20.0], egui::Button::new("Edit")).clicked() {
-                                sound.editing = true;
-                            }
-
-                            if ui.add_sized([col_width, 20.0], egui::Button::new("Remove")).clicked() {
-                                to_remove = Some(idx);
-                            }
-                        }
-
-                        ui.end_row();
+                        });
                     }
+                });
 
-                if let Some(idx) = to_remove {
-                    sounds.remove(idx);
-                }
-            });
+            if let Some(idx) = to_remove {
+                sounds.remove(idx);
+            }
+
+            if let Ok(mut settings) = self.settings.lock() && settings.open {
+                settings.show(ctx, frame);
+            }
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 egui::warn_if_debug_build(ui);
-                if ui.button("Clear Data").clicked() {
+
+                if cfg!(debug_assertions) && ui.button("Clear Data").clicked() {
                     sounds.clear();
                 }
             });

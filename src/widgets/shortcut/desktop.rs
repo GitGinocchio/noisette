@@ -32,7 +32,7 @@ impl Widget for ShortcutRecorder<'_> {
         let is_listening = self
             .listening_shortcut
             .map_or(false, |active_id| active_id == self.id);
-        
+
         let label = if is_listening {
             if let Some(keys) = &self.last_pressed_keys {
                 if keys.is_empty() {
@@ -49,20 +49,33 @@ impl Widget for ShortcutRecorder<'_> {
             "No Shortcut".to_string()
         };
 
+        let mut main_button_response = None;
 
-        let response = ui.button(label);
+        ui.horizontal(|ui| {
+            let response = ui.button(label);
 
-        if response.clicked() {
-            *self.listening_shortcut = Some(self.id);
-            *self.last_pressed_keys = None;
-        }
+            if response.clicked() {
+                *self.listening_shortcut = Some(self.id);
+                *self.last_pressed_keys = None;
+            }
+
+            main_button_response = Some(response);
+
+            if self.shortcut.is_some() {
+                if ui.button("❌").on_hover_text("Rimuovi scorciatoia").clicked() {
+                    *self.shortcut = None;
+                    *self.listening_shortcut = None;
+                    *self.last_pressed_keys = None;
+                }
+            }
+        });
 
         if is_listening {
             let device_state = DeviceState::new();
             let current_keys: Vec<SerializableKeycode> = device_state
                 .get_keys()
                 .into_iter()
-                .map(SerializableKeycode)
+                .map(SerializableKeycode::from)
                 .collect();
 
             if let Some(previous_keys) = &self.last_pressed_keys {
@@ -82,6 +95,7 @@ impl Widget for ShortcutRecorder<'_> {
             }
         }
 
-        response
+        // Restituisci il response del bottone principale
+        main_button_response.unwrap()
     }
 }
