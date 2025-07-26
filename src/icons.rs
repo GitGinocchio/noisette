@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use eframe::egui::{self, TextureHandle, TextureOptions};
 use egui::TextureFilter;
+use egui::IconData;
 
 // Inclusione delle icone
 /*

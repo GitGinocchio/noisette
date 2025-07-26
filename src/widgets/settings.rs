@@ -109,7 +109,7 @@ impl SettingsWindow {
                                     }
                                 }
                             });
-
+                        /*
                         ui.label("2. Output Audio Device:");
                         egui::ComboBox::from_id_salt("2_output_audio_device")
                             .selected_text(
@@ -128,6 +128,7 @@ impl SettingsWindow {
                                     }
                                 }
                             });
+                        */
                     },
                     SettingsTab::Video => { 
                         ui.label(

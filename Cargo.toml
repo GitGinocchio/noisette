@@ -5,6 +5,7 @@ authors = ["Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"]
 edition = "2024"
 include = ["LICENSE-APACHE", "LICENSE-MIT", "**/*.rs", "Cargo.toml"]
 rust-version = "1.88"
+build = "build.rs"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -12,6 +13,9 @@ targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 
 [dev-dependencies]
 sccache = "0.10.0"
+
+[build-dependencies]
+winres = "0.1"
 
 [dependencies]
 image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
