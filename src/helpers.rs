@@ -32,7 +32,7 @@ pub fn show_file_label_with_click(ui: &mut egui::Ui, sound: &Sound) {
                     .corner_radius(egui::CornerRadius::same(2))
                     .show(ui, |ui| {
                         ui.add_sized([0.0, 2.0],label)
-                            .on_hover_text("File non trovato!");
+                            .on_hover_text("File not found!");
                     }).response
             };
 

@@ -91,8 +91,27 @@ impl SettingsWindow {
                         );
                     }
                     SettingsTab::Audio => {
-                        ui.label("Output Audio Device:");
-                        egui::ComboBox::from_id_salt("output_audio_device")
+                        ui.label("1. Output Audio Device:");
+                        egui::ComboBox::from_id_salt("1_output_audio_device")
+                            .selected_text(
+                                self.selected_device_name
+                                    .as_deref()
+                                    .unwrap_or("<no device selected>"),
+                            )
+                            .show_ui(ui, |ui| {
+                                for device_name in &self.output_devices {
+                                    if ui.selectable_value(
+                                        &mut self.selected_device_name, 
+                                        Some(device_name.clone()), 
+                                        device_name
+                                    ).clicked() {
+                                        self.new_device = Some(device_name.clone());
+                                    }
+                                }
+                            });
+
+                        ui.label("2. Output Audio Device:");
+                        egui::ComboBox::from_id_salt("2_output_audio_device")
                             .selected_text(
                                 self.selected_device_name
                                     .as_deref()

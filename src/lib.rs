@@ -8,6 +8,9 @@ pub use app::Noisette;
 
 mod widgets;
 
+mod icons;
+pub use icons::*;
+
 mod utils;
 pub use utils::*;
 

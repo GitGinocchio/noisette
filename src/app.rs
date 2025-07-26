@@ -2,7 +2,7 @@
 // #[cfg(not(target_arch = "wasm32"))]
 // use rfd::FileDialog;
 
-use std::{collections::HashSet, sync::{Arc, Mutex}, thread, time::{Duration}};
+use std::{sync::{Arc, Mutex}, thread, time::Duration};
 
 #[cfg(target_arch = "wasm32")]
 use {
@@ -21,6 +21,8 @@ use crate::widgets::settings::SettingsWindow;
 use crate::sound::Sound;
 use crate::utils::*;
 
+use crate::icons::*;
+
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct Noisette {
@@ -34,11 +36,8 @@ pub struct Noisette {
     shortcut_listener: Arc<Mutex<PlatformShortcutListener>>,
 
     settings: Arc<Mutex<SettingsWindow>>,
-
-    #[serde(skip)]
-    current_playing: Arc<Mutex<HashSet<usize>>>,
     dragging_index: Option<usize>,
-    listening_shortcut: Option<usize>
+    listening_shortcut: Option<usize>,
 }
 
 impl Default for Noisette {
@@ -49,7 +48,6 @@ impl Default for Noisette {
             listening_shortcut: None,
             dragging_index: None,
             audio: Arc::new(Mutex::new(PlatformAudioHandler::new())),
-            current_playing: Arc::new(Mutex::new(HashSet::new())),
             shortcut_listener: Arc::new(Mutex::new(PlatformShortcutListener::new())),
             last_pressed_keys: None,
         }
@@ -78,10 +76,8 @@ impl Noisette {
             let sounds = Arc::clone(&instance.sounds);
             let audio = Arc::clone(&instance.audio);
             let settings = Arc::clone(&instance.settings);
-            let current_playing = Arc::clone(&instance.current_playing);
 
             thread::spawn(move || {
-
                 loop {
                     if let (Ok(mut listener), Ok(mut sounds)) = (shortcut_listener.lock(), sounds.lock()) {
                         listener.update();
@@ -90,8 +86,7 @@ impl Noisette {
                             let sound = &mut sounds[idx];
 
                             if let Some(shortcut) = &sound.shortcut 
-                            && let Ok(audio) = &mut audio.lock() 
-                            && let Ok(mut current_playing) = current_playing.lock() {
+                            && let Ok(audio) = &mut audio.lock()  {
                                 if !listener.is_pressed(&shortcut) {
                                     // Se non e' premuta la shortcut del suono non fare nulla
                                     continue;
@@ -102,23 +97,21 @@ impl Noisette {
                                     continue;
                                 }
 
-                                if audio.is_playing() {
+                                if audio.is_playing(None) {
                                     // Se c'e' gia' un suono in riproduzione
                                     if let Ok(settings) = settings.lock() {
-                                        if settings.toggle_to_stop && current_playing.contains(&idx) {
+                                        if settings.toggle_to_stop && audio.is_playing(Some(sound.clone())) {
                                             // e c'e' l'opzione di premere una seconda volta per stoppare l'audio
                                             // e l'audio attuale e' uguale a quello in riproduzione
                                             audio.stop(sound);
-                                            current_playing.remove(&idx);
                                             thread::sleep(Duration::from_millis(1000));
                                             continue;
                                         }
 
-                                        if settings.stop_on_new  && !current_playing.contains(&idx) {
+                                        if settings.stop_on_new  && !audio.is_playing(Some(sound.clone())) {
                                             // e c'e' l'opzione di premere un altra shortcut per iniziare un altro audi
                                             // e l'audio attuale e' diverso da quello in riproduzione
-
-                                            current_playing.insert(idx);
+                                            audio.stop_all();
                                             audio.play(sound);
                                             thread::sleep(Duration::from_millis(1000));
                                             continue;
@@ -131,8 +124,6 @@ impl Noisette {
                                 // Se non c'e' nessun audio in riproduzione
                                 // e il suono attuale e' premuto
                                 // e il suono attuale non e' in modalita' modifica
-
-                                current_playing.insert(idx);
                                 audio.play(sound);
                                 thread::sleep(Duration::from_millis(1000));
                                 break;
@@ -215,9 +206,9 @@ impl eframe::App for Noisette {
                 columns[0].add_sized([0.0, 2.0],egui::Label::new("Name"));
                 columns[1].add_sized([0.0, 2.0],egui::Label::new("Shortcut"));
                 columns[2].add_sized([0.0, 2.0],egui::Label::new("File"));
-                columns[3].add_sized([0.0, 2.0],egui::Label::new("Select / Play"));
-                columns[4].add_sized([0.0, 2.0],egui::Label::new("Edit / Save"));
-                columns[5].add_sized([0.0, 2.0],egui::Label::new("Remove"));
+                columns[3].add_sized([2.0, 2.0],egui::Label::new("Select / Play"));
+                columns[4].add_sized([2.0, 2.0],egui::Label::new("Edit / Save"));
+                columns[5].add_sized([2.0, 2.0],egui::Label::new("Remove"));
             });
             ui.separator();
 
@@ -250,9 +241,19 @@ impl eframe::App for Noisette {
                                 ));
 
                                 show_file_label_with_click(&mut columns[2], sound);
+                                
+                                /*
+                                let select_btn = if let Some(icon) = self.icons.get("load") {
+                                    egui::Button::image(icon)
+                                }
+                                else {
+                                    egui::Button::new("Select File")
+                                };
+                                */
+                                let select_btn = egui::Button::new(LOAD_EMOJI);
 
                                 // Select File
-                                if columns[3].add_sized([0.0, 2.0],egui::Button::new("Select File").min_size(egui::Vec2::ZERO)).clicked() {
+                                if columns[3].add_sized([0.0, 2.0], select_btn.min_size(egui::Vec2::ZERO)).clicked() {
                                     #[cfg(not(target_arch = "wasm32"))]
                                     {
                                         if let Some(path) = rfd::FileDialog::new().add_filter("Audio", &["mp3", "wav"]).pick_file() {
@@ -265,16 +266,39 @@ impl eframe::App for Noisette {
                                     }
                                 }
 
+                                /*
+                                let save_btn = if let Some(icon) = self.icons.get("save") {
+                                    egui::Button::image(icon)
+                                }
+                                else {
+                                    egui::Button::new("Select File")
+                                };
+                                */
+
+                                let save_btn = egui::Button::new(SAVE_EMOJI);
+
                                 // Save
-                                if columns[4].add_sized([0.0, 2.0],egui::Button::new("Save").min_size(egui::Vec2::ZERO)).clicked() {
+                                if columns[4].add_sized([0.0, 2.0],save_btn.min_size(egui::Vec2::ZERO)).clicked() {
                                     sound.editing = false;
                                 }
 
+                                /*
+                                let remove_btn = if let Some(icon) = self.icons.get("remove") {
+                                    egui::Button::image(icon)
+                                }
+                                else {
+                                    egui::Button::new("Remove")
+                                };
+                                */
+
+                                let remove_btn = egui::Button::new(REMOVE_EMOJI);
+
                                 // Remove
-                                if columns[5].add_sized([0.0, 2.0], egui::Button::new("Remove").min_size(egui::Vec2::ZERO)).clicked() {
+                                if columns[5].add_sized([0.0, 2.0], remove_btn.min_size(egui::Vec2::ZERO)).clicked() {
                                     to_remove = Some(idx);
                                 }
-                            } else {
+                            } 
+                            else {
                                 let label = sound.name.as_deref().filter(|s| !s.is_empty()).unwrap_or("No Name");
 
                                 // Name
@@ -296,27 +320,67 @@ impl eframe::App for Noisette {
                                 show_file_label_with_click(&mut columns[2], sound);
 
                                 // Play / Stop button
-                                if let Ok(mut current_playing) = self.current_playing.lock() {
-                                    if current_playing.contains(&idx) {
-                                        if columns[3].add_sized([0.0, 2.0], egui::Button::new("Stop")).clicked() {
-                                            audio.stop(sound);
-                                            current_playing.remove(&idx);
-                                        }
-                                    } else {
-                                        if columns[3].add_sized([0.0, 2.0], egui::Button::new("Play")).clicked() {
-                                            audio.play(sound);
-                                            current_playing.insert(idx);
-                                        }
+                                if audio.is_playing(Some(sound.clone())) {
+                                    /*
+                                    let stop_btn = if let Some(icon) = self.icons.get("stop") {
+                                        egui::Button::image(icon)
+                                    }
+                                    else {
+                                        egui::Button::new("Stop")
+                                    };
+                                    */
+                                    let stop_btn = egui::Button::new(STOP_EMOJI);
+
+                                    if columns[3].add_sized([0.0, 2.0], stop_btn).clicked() {
+                                        audio.stop(sound);
+                                    }
+                                } else {
+                                    /*
+                                    let play_btn = if let Some(icon) = self.icons.get("play") {
+                                        egui::Button::image(icon)
+                                    }
+                                    else {
+                                        egui::Button::new("Play")
+                                    };
+                                    */
+
+                                    let play_btn = egui::Button::new(PLAY_EMOJI);
+
+                                    if columns[3].add_sized([0.0, 2.0], play_btn).clicked() {
+                                        audio.stop_all();
+                                        audio.play(sound);
                                     }
                                 }
 
+                                /*
+                                let edit_btn = if let Some(icon) = self.icons.get("edit") {
+                                    egui::Button::image(icon)
+                                }
+                                else {
+                                    egui::Button::new("Edit")
+                                };
+                                */
+
+                                let edit_btn = egui::Button::new(EDIT_EMOJI);
+
                                 // Edit
-                                if columns[4].add_sized([0.0, 2.0],egui::Button::new("Edit")).clicked() {
+                                if columns[4].add_sized([2.0, 2.0],edit_btn).clicked() {
                                     sound.editing = true;
                                 }
 
+                                /*
+                                let remove_btn = if let Some(icon) = self.icons.get("remove") {
+                                    egui::Button::image(icon)
+                                }
+                                else {
+                                    egui::Button::new("Remove")
+                                };
+                                */
+
+                                let remove_btn = egui::Button::new(REMOVE_EMOJI);
+
                                 // Remove
-                                if columns[5].add_sized([0.0, 2.0],egui::Button::new("Remove")).clicked() {
+                                if columns[5].add_sized([2.0, 2.0], remove_btn).clicked() {
                                     to_remove = Some(idx);
                                 }
                             }

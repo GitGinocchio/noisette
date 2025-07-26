@@ -2,6 +2,8 @@ use rodio::cpal::{self, Device};
 use rodio::cpal::traits::{HostTrait, DeviceTrait};
 use rodio::OutputStreamHandle;
 use rodio::{Decoder, OutputStream, Sink};
+use std::fs::exists;
+use std::path::Path;
 use std::time::{Duration, Instant};
 use std::{fs::File, io::BufReader, sync::{Arc, Mutex}};
 use std::sync::mpsc::{self, Sender, Receiver};
@@ -69,13 +71,16 @@ impl AudioBackend for DesktopAudio {
     fn play(&mut self, sound: &Sound) {
         self.clean_finished_sinks();
 
-        let path = match &sound.path {
+        let path_string = match &sound.path {
             Some(p) => p.clone(),
             None => {
                 eprintln!("Sound path is None!");
                 return;
             }
         };
+
+        let path = Path::new(&path_string);
+        if !exists(path).expect("An error occurred") { return; }
 
         let file = File::open(&path).unwrap();
         let source = Decoder::new(BufReader::new(file)).unwrap();
@@ -84,7 +89,7 @@ impl AudioBackend for DesktopAudio {
         sink.as_ref().append(source);
 
         let mut sinks = self.sinks.lock().unwrap();
-        sinks.insert(path, sink);
+        sinks.insert(path_string, sink);
     }
 
     fn stop(&mut self, sound: &Sound) {
@@ -94,10 +99,28 @@ impl AudioBackend for DesktopAudio {
         }
     }
 
-    fn is_playing(&self) -> bool {
+    fn stop_all(&mut self) {
+        let mut sinks = self.sinks.lock().unwrap();
+        for (_, sink) in sinks.iter() {
+            sink.stop();
+        }
+        sinks.clear(); // Rimuove tutti i riferimenti dopo lo stop
+    }
+
+    fn is_playing(&self, sound: Option<Sound>) -> bool {
         self.clean_finished_sinks();
         let sinks = self.sinks.lock().unwrap();
-        sinks.values().any(|sink| !sink.empty())
+
+        match sound {
+            Some(sound) => {
+                if let Some(path) = &sound.path {
+                    sinks.get(path).map_or(false, |sink| !sink.empty())
+                } else {
+                    false
+                }
+            }
+            None => sinks.values().any(|sink| !sink.empty()),
+        }
     }
 
 }
@@ -136,7 +159,8 @@ pub fn get_device_from_name(name: Option<String>) -> Option<Device> {
 pub enum AudioCommand {
     Play(Sound),
     Stop(Sound),
-    IsPlaying(Sender<bool>),
+    StopAll,
+    IsPlaying(Sender<bool>, Option<Sound>),
     SetDevice(Option<String>)
 }
 
@@ -171,7 +195,13 @@ impl DesktopAudioHandler {
                 match cmd {
                     AudioCommand::Play(sound) => audio.play(&sound),
                     AudioCommand::Stop(sound) => audio.stop(&sound),
-                    AudioCommand::IsPlaying(sender) => sender.send(audio.is_playing()).expect("Error while sending is_playing event"),
+                    AudioCommand::StopAll => audio.stop_all(),
+                    AudioCommand::IsPlaying(sender, sound) => {
+                        sender
+                            .send(audio.is_playing(sound))
+                            .map_err(|error| format!("{error:#?}"))
+                            .expect("Error occurred while sending is_playing signal:");
+                    }
                     AudioCommand::SetDevice(device) => audio.set_device(device)
                 }
             }
@@ -194,17 +224,21 @@ impl AudioBackend for DesktopAudioHandler {
         let _ = self.sender.send(AudioCommand::Stop(sound.clone()));
     }
 
-    fn is_playing(&self) -> bool {
+    fn stop_all(&mut self) {
+        let _ = self.sender.send(AudioCommand::StopAll);
+    }
+
+    fn is_playing(&self, sound: Option<Sound>) -> bool {
         let (resp_tx, resp_rx) = mpsc::channel();
 
         // Manda richiesta con il canale di risposta
-        if self.sender.send(AudioCommand::IsPlaying(resp_tx)).is_err() {
+        if self.sender.send(AudioCommand::IsPlaying(resp_tx, sound)).is_err() {
             // thread audio chiuso o errore
             return false;
         }
 
-        // Aspetta la risposta con un timeout ragionevole (es. 100ms)
-        match resp_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+        // Aspetta la risposta con un timeout ragionevole (es. 300ms)
+        match resp_rx.recv() {
             Ok(is_playing) => is_playing,
             Err(_) => false, // timeout o errore -> assumiamo non in riproduzione
         }
